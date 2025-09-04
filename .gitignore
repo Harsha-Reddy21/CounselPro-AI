@@ -89,3 +89,4 @@ myenv/
 myenv
 venv/
 venv
+credentials.json

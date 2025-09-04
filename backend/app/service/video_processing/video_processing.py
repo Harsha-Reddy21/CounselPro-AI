@@ -4,8 +4,16 @@ import cv2
 import numpy as np
 import os
 import base64
-from deepface import DeepFace
 from datetime import datetime
+
+# Try to import DeepFace, but provide a fallback if it fails
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except (ImportError, ValueError) as e:
+    print(f"DeepFace import error: {e}")
+    print("Running with limited face detection capabilities.")
+    DEEPFACE_AVAILABLE = False
 from langchain.chat_models import init_chat_model
 from typing import Optional, Dict
 import logging
@@ -39,23 +47,27 @@ class VideoProcessor:
         self.person_embeddings = {}  # person_id -> List[face images] for DeepFace.verify()
         self.person_display_images = {}  # person_id -> face image with bounding box for UI
 
-        # Pre-load DeepFace models
-        try:
-            logger.info("Initializing DeepFace models...")
-            # Warm up face detection and recognition using official API
-            dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
-            _ = DeepFace.extract_faces(
-                img_path=dummy_img,
-                enforce_detection=False
-            )
-            _ = DeepFace.represent(
-                img_path=dummy_img,
-                enforce_detection=False
-            )
-            logger.info("DeepFace models initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize DeepFace: {e}")
-            raise
+        # Pre-load DeepFace models if available
+        if DEEPFACE_AVAILABLE:
+            try:
+                logger.info("Initializing DeepFace models...")
+                # Warm up face detection and recognition using official API
+                dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
+                _ = DeepFace.extract_faces(
+                    img_path=dummy_img,
+                    enforce_detection=False
+                )
+                _ = DeepFace.represent(
+                    img_path=dummy_img,
+                    enforce_detection=False
+                )
+                logger.info("DeepFace models initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize DeepFace: {e}")
+                logger.warning("Running with limited face detection capabilities.")
+                DEEPFACE_AVAILABLE = False
+        else:
+            logger.warning("DeepFace not available. Running with limited face detection capabilities.")
 
         logger.info("VideoProcessor initialized successfully")
 
@@ -73,30 +85,67 @@ class VideoProcessor:
         self.cleanup_resources()
 
     def _find_matching_person(self, face_img: np.ndarray) -> Optional[int]:
-        """Find if this face matches any known person using DeepFace verification"""
+        """Find if this face matches any known person using face verification"""
         if face_img is None:
             return None
             
         best_match = None
         lowest_distance = float('inf')
+        
+        if not self.person_embeddings:
+            return None
             
-        for person_id, stored_face_imgs in self.person_embeddings.items():
-            for stored_face in stored_face_imgs:
-                try:
-                    # Use DeepFace.verify for proper face matching
-                    result = DeepFace.verify(
-                        img1_path=face_img,
-                        img2_path=stored_face,
-                        enforce_detection=False
-                    )
-                    
-                    if result["verified"] and result["distance"] < lowest_distance:
-                        lowest_distance = result["distance"]
-                        best_match = person_id
+        if DEEPFACE_AVAILABLE:
+            # Use DeepFace for face matching if available
+            for person_id, stored_face_imgs in self.person_embeddings.items():
+                for stored_face in stored_face_imgs:
+                    try:
+                        # Use DeepFace.verify for proper face matching
+                        result = DeepFace.verify(
+                            img1_path=face_img,
+                            img2_path=stored_face,
+                            enforce_detection=False
+                        )
                         
-                except Exception as e:
-                    logger.debug(f"Face verification error: {e}")
-                    continue
+                        if result["verified"] and result["distance"] < lowest_distance:
+                            lowest_distance = result["distance"]
+                            best_match = person_id
+                            
+                    except Exception as e:
+                        logger.debug(f"Face verification error: {e}")
+                        continue
+        else:
+            # Simple fallback using histogram comparison when DeepFace is not available
+            # This is much less accurate but allows basic functionality
+            for person_id, stored_face_imgs in self.person_embeddings.items():
+                for stored_face in stored_face_imgs:
+                    try:
+                        # Resize both images to same dimensions
+                        face_img_resized = cv2.resize(face_img, (128, 128))
+                        stored_face_resized = cv2.resize(stored_face, (128, 128))
+                        
+                        # Convert to grayscale for simpler comparison
+                        face_img_gray = cv2.cvtColor(face_img_resized, cv2.COLOR_BGR2GRAY)
+                        stored_face_gray = cv2.cvtColor(stored_face_resized, cv2.COLOR_BGR2GRAY)
+                        
+                        # Compare histograms
+                        hist1 = cv2.calcHist([face_img_gray], [0], None, [256], [0, 256])
+                        hist2 = cv2.calcHist([stored_face_gray], [0], None, [256], [0, 256])
+                        
+                        # Normalize histograms
+                        cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+                        cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+                        
+                        # Compare using correlation method
+                        distance = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+                        distance = 1.0 - distance  # Convert to distance (lower is better)
+                        
+                        if distance < lowest_distance and distance < 0.4:  # Threshold
+                            lowest_distance = distance
+                            best_match = person_id
+                    except Exception as e:
+                        logger.debug(f"Fallback face verification error: {e}")
+                        continue
                     
         return best_match
 
@@ -273,13 +322,30 @@ class VideoProcessor:
                 current_persons = set()  # Track active persons in this frame
 
                 try:
-                    # OPTIMIZED: Use DeepFace.extract_faces() for faster face detection only
-                    face_objs = DeepFace.extract_faces(
-                        img_path=frame,
-                        enforce_detection=False,
-                        detector_backend='yolov8',  # Fastest detector
-                        anti_spoofing=True
-                    )
+                    if DEEPFACE_AVAILABLE:
+                        # OPTIMIZED: Use DeepFace.extract_faces() for faster face detection only
+                        face_objs = DeepFace.extract_faces(
+                            img_path=frame,
+                            enforce_detection=False,
+                            detector_backend='yolov8',  # Fastest detector
+                            anti_spoofing=True
+                        )
+                    else:
+                        # Fallback to OpenCV's built-in face detection when DeepFace is not available
+                        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                        
+                        # Convert OpenCV face detections to a format similar to DeepFace
+                        face_objs = []
+                        for (x, y, w, h) in faces:
+                            face_img = frame[y:y+h, x:x+w]
+                            if face_img.size > 0:  # Ensure face image is valid
+                                face_objs.append({
+                                    "face": face_img / 255.0,  # Normalize to match DeepFace format
+                                    "facial_area": {"x": x, "y": y, "w": w, "h": h},
+                                    "is_real": True  # No anti-spoofing available in fallback
+                                })
 
                     if face_objs:
                         for i, face_obj in enumerate(face_objs):

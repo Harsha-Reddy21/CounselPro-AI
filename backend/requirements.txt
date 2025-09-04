@@ -7,7 +7,7 @@ aiosqlite
 asyncpg
 # PostgreSQL support
 psycopg2-binary
-
+tf-keras
 # AI & LangChain
 langchain
 langchain-community
