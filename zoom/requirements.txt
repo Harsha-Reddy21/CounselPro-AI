@@ -1,0 +1,21 @@
+# API Framework
+fastapi
+uvicorn[standard]
+
+# HTTP Requests
+requests
+
+# Environment Variables
+python-dotenv
+
+# Data Validation
+pydantic
+
+# Middleware
+fastapi-cors
+
+# Time Handling
+time
+
+# Standard Libraries (no installation needed)
+# os
