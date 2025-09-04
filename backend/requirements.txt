@@ -4,7 +4,7 @@ uvicorn[standard]
 asyncpg
 sqlalchemy[asyncio]
 aiosqlite
-
+asyncpg
 # PostgreSQL support
 psycopg2-binary
 

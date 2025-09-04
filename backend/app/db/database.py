@@ -7,20 +7,15 @@ import ssl
 # Load .env file
 load_dotenv()
 # Get the database URL from environment variables
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("ASYNC_DATABASE_URL")
 if DATABASE_URL is None:
-    raise ValueError("DATABASE_URL environment variable is not set.")
+    raise ValueError("ASYNC_DATABASE_URL environment variable is not set.")
 
 # Create async engine
 engine = create_async_engine(
-    DATABASE_URL, echo=True, future=True  # Shows SQL queries in console
-)
-
-
-engine = create_async_engine(
     DATABASE_URL,
     echo=True,
-    future=True,
+    future=True,  # Shows SQL queries in console
 )
 
 # Create session maker
@@ -59,7 +54,7 @@ async def create_tables():
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-SYNC_DATABASE_URL = DATABASE_URL.replace("asyncpg", "psycopg2")  # if PostgreSQL
+SYNC_DATABASE_URL = os.getenv("DATABASE_URL") or DATABASE_URL.replace("asyncpg", "psycopg2")  # Use DATABASE_URL if available
 sync_engine = create_engine(
     SYNC_DATABASE_URL,
     echo=True,
